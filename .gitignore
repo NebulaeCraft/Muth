@@ -1,0 +1,7 @@
+.idea
+config/config.yaml
+.DS_Store
+assets/music/*
+*.exe
+assets/dist/
+MusicBot
