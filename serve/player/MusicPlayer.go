@@ -1,26 +1,21 @@
 package player
 
 import (
-	"MusicBot/config"
+	"Muth/config"
+	"bytes"
 	"fmt"
 	"github.com/gammazero/deque"
 	"github.com/lonelyevil/kook"
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
 type Music struct {
-	ID       string
-	Name     string
-	Artists  []string
-	Album    string
-	File     string
-	LastTime int
+	File string
 }
 
 type ThreadManager struct {
@@ -44,18 +39,9 @@ type Player struct {
 var MusicPlayer *Player
 
 func (music *Music) Copy() *Music {
-	var artists []string
-	for _, artist := range music.Artists {
-		artists = append(artists, artist)
-	}
 
 	return &Music{
-		ID:       music.ID,
-		Name:     music.Name,
-		Artists:  artists,
-		Album:    music.Album,
-		File:     music.File,
-		LastTime: music.LastTime,
+		File: music.File,
 	}
 }
 
@@ -91,9 +77,13 @@ func (tm *ThreadManager) StartThread(onExit func(), player *Player) error {
 	tm.cmd = cmd
 	tm.onExit = onExit
 
+	var outputBuffer bytes.Buffer
+	cmd.Stdout = &outputBuffer
+	cmd.Stderr = &outputBuffer
+
 	go func() {
 		if err := cmd.Run(); err != nil {
-			logger.Err(err).Msg("Error when running thread")
+			logger.Err(err).Msgf("Error when running thread: %s", outputBuffer.String())
 		}
 
 		time.Sleep(5 * time.Second)
@@ -147,40 +137,10 @@ func (player *Player) AddMusic(music *Music) {
 	defer player.Mutex.Unlock()
 
 	player.Queue.PushBack(music)
-	player.SendMsg(fmt.Sprintf("%s 已加入播放列表", music.Name))
-}
-
-func (player *Player) RemoveMusic(musicID string) string {
-	player.Mutex.Lock()
-	defer player.Mutex.Unlock()
-
-	for i := 0; i < player.Queue.Len(); i++ {
-		music := player.Queue.At(i)
-		if music.ID == musicID {
-			name := music.Name
-			player.Queue.Remove(i)
-			return name
-		}
-	}
-
-	return ""
 }
 
 func (player *Player) SetCtx(ctx *kook.KmarkdownMessageContext) {
 	player.Ctx = ctx
-}
-
-func (player *Player) SkipMusic() {
-	player.Mutex.Lock()
-	defer player.Mutex.Unlock()
-
-	if player.NowPlaying != nil {
-		player.SendMsg(fmt.Sprintf("即将跳过歌曲 %s", player.NowPlaying.Name))
-		player.Manager.StopThread()
-	} else {
-		player.SendMsg("当前没有歌曲在播放")
-	}
-
 }
 
 func (player *Player) SetVolume(volume int) {
@@ -220,17 +180,16 @@ func (player *Player) Worker() {
 			player.Mutex.Lock()
 
 			player.NowPlaying = player.Queue.PopFront()
-			logger.Info().Msg("Now playing: " + player.NowPlaying.Name)
+			logger.Info().Msg("Now playing: " + player.NowPlaying.File)
 			logger.Info().Msg("Queue length: " + strconv.Itoa(player.Queue.Len()))
 
 			player.Mutex.Unlock()
 
-			logger.Info().Msg("Starting thread: " + player.NowPlaying.Name)
+			logger.Info().Msg("Starting thread: " + player.NowPlaying.File)
 			player.Manager.StartThread(func() {
 				player.NowPlaying = nil
 				logger.Info().Msg("Set NowPlaying to nil")
 			}, player)
-			player.SendMusicCard(player.NowPlaying)
 		}
 	}
 }
@@ -242,106 +201,4 @@ func (player *Player) SendMsg(content string) {
 			Content:  content,
 		},
 	})
-}
-
-func (player *Player) SendMusicCard(musicReq *Music) {
-	logger := config.Logger
-	cardMsg := kook.CardMessageCard{
-		Theme: kook.CardThemeSuccess,
-		Size:  kook.CardSizeLg,
-	}
-	section := kook.CardMessageSection{
-		Mode: kook.CardMessageSectionModeRight,
-		Text: kook.CardMessageElementKMarkdown{
-			Content: "**歌曲：** " + musicReq.Name + "\n**歌手：** " + strings.Join(musicReq.Artists, ", ") + "\n**时长：** " + time.Duration(musicReq.LastTime*1000000).String(),
-		},
-	}
-	cardMsg.AddModule(section.SetAccessory(&kook.CardMessageElementImage{
-		Src:  musicReq.Album,
-		Size: "lg",
-	}))
-	cardMsgCtx, err := cardMsg.MarshalJSON()
-	if err != nil {
-		logger.Error().Err(err).Msg("Marshal card message failed")
-		return
-	}
-	cardMsgCtxStr := fmt.Sprintf("[%s]", cardMsgCtx)
-	_, _ = player.Ctx.Session.MessageCreate(&kook.MessageCreate{
-		MessageCreateBase: kook.MessageCreateBase{
-			TargetID: player.Ctx.Common.TargetID,
-			Content:  cardMsgCtxStr,
-			Type:     kook.MessageTypeCard,
-		},
-	})
-}
-
-func (player *Player) SendMusicList() {
-	player.Mutex.Lock()
-	defer player.Mutex.Unlock()
-
-	logger := config.Logger
-
-	cardMsg := kook.CardMessageCard{
-		Theme: kook.CardThemeSuccess,
-		Size:  kook.CardSizeLg,
-	}
-	if player.Queue.Len() == 0 {
-		section := kook.CardMessageSection{
-			Mode: kook.CardMessageSectionModeRight,
-			Text: kook.CardMessageElementKMarkdown{
-				Content: "**歌曲列表为空**",
-			},
-		}
-		cardMsg.AddModule(section.SetAccessory(&kook.CardMessageElementButton{
-			Theme: kook.CardThemeInfo,
-			Text:  "好了好了，我知道了",
-			Click: string(kook.CardMessageElementButtonClickReturnVal),
-			Value: "CONFIRM",
-		}))
-	} else {
-
-		for i := 0; i < player.Queue.Len(); i++ {
-			musicCtx := player.Queue.At(i)
-
-			section := kook.CardMessageSection{
-				Mode: kook.CardMessageSectionModeRight,
-				Text: kook.CardMessageElementKMarkdown{
-					Content: "**歌曲：** " + musicCtx.Name + "\n**歌手：** " + strings.Join(musicCtx.Artists, ", ") + "\n**时长：** " + time.Duration(musicCtx.LastTime*1000000).String(),
-				},
-			}
-			cardMsg.AddModule(section.SetAccessory(&kook.CardMessageElementButton{
-				Theme: kook.CardThemeDanger,
-				Text:  "删除",
-				Click: string(kook.CardMessageElementButtonClickReturnVal),
-				Value: "DEL" + musicCtx.ID,
-			}))
-		}
-	}
-	cardMsgCtx, err := cardMsg.MarshalJSON()
-	if err != nil {
-		logger.Error().Err(err).Msg("Marshal card message failed")
-		return
-	}
-	cardMsgCtxStr := fmt.Sprintf("[%s]", cardMsgCtx)
-	_, _ = player.Ctx.Session.MessageCreate(&kook.MessageCreate{
-		MessageCreateBase: kook.MessageCreateBase{
-			TargetID: player.Ctx.Common.TargetID,
-			Content:  cardMsgCtxStr,
-			Type:     kook.MessageTypeCard,
-		},
-	})
-}
-
-func (player *Player) GetMusicByID(id string) *Music {
-	player.Mutex.Lock()
-	defer player.Mutex.Unlock()
-
-	for i := 0; i < player.Queue.Len(); i++ {
-		music := player.Queue.At(i)
-		if music.ID == id {
-			return music
-		}
-	}
-
-	return nil
 }

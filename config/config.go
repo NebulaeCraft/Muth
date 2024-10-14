@@ -12,10 +12,20 @@ type envConfig struct {
 	BotToken      string `yaml:"BotToken"`
 	KOOKVoice     string `yaml:"KOOKVoice"`
 	DefaultVolume int    `yaml:"DefaultVolume"`
-	VoiceChannel  []struct {
+	TextChannel   []struct {
+		Name string `yaml:"Name"`
+		ID   int    `yaml:"ID"`
+	} `yaml:"TextChannel"`
+	VoiceChannel []struct {
 		Name string `yaml:"Name"`
 		ID   int    `yaml:"ID"`
 	} `yaml:"VoiceChannel"`
+	Speaker []struct {
+		Name     string `yaml:"Name"`
+		Provider string `yaml:"Provider"`
+		Arg      string `yaml:"Arg"`
+	} `yaml:"Speaker"`
+	SilentDuration string `yaml:"SilentDuration"`
 }
 
 var Config *envConfig

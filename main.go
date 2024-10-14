@@ -1,11 +1,11 @@
 package main
 
 import (
-	"MusicBot/config"
-	"MusicBot/handlers"
-	"MusicBot/handlers/button"
-	"MusicBot/handlers/message"
-	"MusicBot/serve/player"
+	"Muth/config"
+	"Muth/handlers"
+	"Muth/handlers/message"
+	"Muth/serve/player"
+	"Muth/serve/tts"
 	"github.com/lonelyevil/kook"
 	"github.com/lonelyevil/kook/log_adapter/plog"
 	"os"
@@ -26,9 +26,10 @@ func main() {
 	s := kook.New(config.Config.BotToken, plog.NewLogger(logger))
 
 	player.MusicPlayer = player.NewPlayer()
+	tts.TTS = tts.NewTTS()
 
 	// Register KOOK handlers
-	handlers.RegistryHandlers(s, message.MessageHan, button.ButtonHan)
+	handlers.RegistryHandlers(s, message.MessageHan)
 
 	// Start KOOK
 	err = s.Open()

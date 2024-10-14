@@ -1,16 +1,30 @@
 package message
 
 import (
-	"MusicBot/config"
-	"MusicBot/serve/NetEase"
-	"MusicBot/serve/player"
+	"Muth/config"
+	"Muth/serve/player"
+	"Muth/serve/tts"
 	"fmt"
-	"regexp"
+	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lonelyevil/kook"
 )
+
+func IsInTTSChannel(channelID string) (bool, error) {
+	id, err := strconv.ParseInt(channelID, 10, 64)
+	if err != nil {
+		return false, err
+	}
+	for _, v := range config.Config.TextChannel {
+		if v.ID == int(id) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 func MessageHan(ctx *kook.KmarkdownMessageContext) {
 	logger := config.Logger
@@ -19,6 +33,16 @@ func MessageHan(ctx *kook.KmarkdownMessageContext) {
 	}
 	logger.Info().Msg("Message received: " + ctx.Common.Content)
 	player.MusicPlayer.SetCtx(ctx)
+
+	isInTTSChannel, err := IsInTTSChannel(ctx.Common.TargetID)
+	if err != nil {
+		logger.Error().Err(err).Msg("IsInTTSChannel")
+	}
+
+	if !isInTTSChannel {
+		return
+	}
+
 	if strings.HasPrefix(ctx.Common.Content, "ping") {
 		// Ping
 		ctx.Common.Content = strings.TrimPrefix(ctx.Common.Content, "ping")
@@ -29,79 +53,17 @@ func MessageHan(ctx *kook.KmarkdownMessageContext) {
 				Quote:    ctx.Common.MsgID,
 			},
 		})
-	} else if strings.HasPrefix(ctx.Common.Content, "/version") {
-		// Version
-		_, _ = ctx.Session.MessageCreate(&kook.MessageCreate{
-			MessageCreateBase: kook.MessageCreateBase{
-				TargetID: ctx.Common.TargetID,
-				Content:  "golang 1.0",
-				Quote:    ctx.Common.MsgID,
-			},
-		})
-	} else if strings.HasPrefix(ctx.Common.Content, "/reload") {
-
-	} else if strings.HasPrefix(ctx.Common.Content, "/v ") {
+	} else if strings.HasPrefix(ctx.Common.Content, "/tts v ") {
 		// Change volume
-		ctx.Common.Content = strings.TrimPrefix(ctx.Common.Content, "/v ")
+		ctx.Common.Content = strings.TrimPrefix(ctx.Common.Content, "/tts v ")
 		ChangeVolumeMessageHandler(ctx)
-	} else if strings.HasPrefix(ctx.Common.Content, "/c ") {
+	} else if strings.HasPrefix(ctx.Common.Content, "/tts c ") {
 		// Change channel
-		ctx.Common.Content = strings.TrimPrefix(ctx.Common.Content, "/c ")
+		ctx.Common.Content = strings.TrimPrefix(ctx.Common.Content, "/tts c ")
 		ChangeChannelMessageHandler(ctx)
-	} else if strings.HasPrefix(ctx.Common.Content, "/n ") || strings.HasPrefix(ctx.Common.Content, "/s ") || strings.HasPrefix(ctx.Common.Content, "/b ") || strings.HasPrefix(ctx.Common.Content, "/q ") {
-		if strings.HasPrefix(ctx.Common.Content, "/n ") {
-			// Netease Music
-			ctx.Common.Content = strings.TrimPrefix(ctx.Common.Content, "/n ")
-			NetEaseMusicMessageHandler(ctx)
-		} else if strings.HasPrefix(ctx.Common.Content, "/s ") {
-			// Netease Music Search
-			ctx.Common.Content = strings.TrimPrefix(ctx.Common.Content, "/s ")
-			NetEaseMusicSearchMessageHandler(ctx)
-		}
-	} else if ctx.Common.Content == "/skip" {
-		// Skip
-		SkipMusicMessageHandler(ctx)
-	} else if ctx.Common.Content == "/list" {
-		// List
-		player.MusicPlayer.SendMusicList()
+	} else {
+		TTSMessageHandler(ctx)
 	}
-}
-
-func NetEaseMusicSearchMessageHandler(ctx *kook.KmarkdownMessageContext) {
-	logger := config.Logger
-	searchList, err := NetEase.SearchMusic(ctx.Common.Content)
-	if err != nil {
-		logger.Error().Err(err).Msg("Search music failed")
-		player.MusicPlayer.SendMsg("搜索音乐失败")
-		return
-	}
-	NetEase.SendSelectList(ctx, searchList)
-}
-
-func NetEaseMusicMessageHandler(ctx *kook.KmarkdownMessageContext) {
-	logger := config.Logger
-
-	re := regexp.MustCompile(`song\?id=(\d+)`)
-	match := re.FindStringSubmatch(ctx.Common.Content)
-	if len(match) > 1 {
-		ctx.Common.Content = match[1]
-	}
-
-	id, err := strconv.ParseInt(ctx.Common.Content, 10, 64)
-	if err != nil {
-		logger.Error().Err(err).Msg("Parse music id failed")
-		player.MusicPlayer.SendMsg("解析音乐ID失败：输入不合法")
-		return
-	}
-
-	logger.Info().Msgf("Query music for id: %d", id)
-	musicResult, err := NetEase.QueryMusic(int(id))
-	if err != nil {
-		logger.Error().Err(err).Msg("Query music failed")
-		player.MusicPlayer.SendMsg("查询音乐失败")
-		return
-	}
-	player.MusicPlayer.AddMusic(musicResult)
 }
 
 func ChangeVolumeMessageHandler(ctx *kook.KmarkdownMessageContext) {
@@ -136,6 +98,42 @@ func ChangeChannelMessageHandler(ctx *kook.KmarkdownMessageContext) {
 	player.MusicPlayer.SendMsg(fmt.Sprintf("频道已切换为 %s", ctx.Common.Content))
 }
 
-func SkipMusicMessageHandler(ctx *kook.KmarkdownMessageContext) {
-	player.MusicPlayer.SkipMusic()
+func generateIdentifier(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	seed := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(seed)
+	identifier := make([]byte, length)
+	for i := range identifier {
+		identifier[i] = charset[r.Intn(len(charset))]
+	}
+	return string(identifier)
+}
+
+func TTSMessageHandler(ctx *kook.KmarkdownMessageContext) {
+	logger := config.Logger
+
+	if len(ctx.Common.Content) > 300 {
+		player.MusicPlayer.SendMsg("消息内容过长！")
+		return
+	}
+
+	// Get user nickname
+	nickname, err := ctx.Session.UserView(ctx.Common.AuthorID)
+	if err != nil {
+		logger.Error().Err(err).Str("AuthorID", ctx.Common.AuthorID).Msg("GetUserView failed")
+		player.MusicPlayer.SendMsg("无法获取用户信息，AuthorID: " + ctx.Common.AuthorID)
+	}
+	logger.Info().Msgf("TTS Message: %s, Author: %s", ctx.Common.Content, nickname.Nickname)
+
+	// Synthesize audio
+	text := nickname.Nickname + "说：" + ctx.Common.Content
+	path := "./assets/voice/" + generateIdentifier(6) + ".mp3"
+	path, _ = tts.TTS.Speak(text, path, "zh-CN-YunxiNeural")
+
+	music := &player.Music{
+		File: path,
+	}
+
+	// Add to player
+	player.MusicPlayer.AddMusic(music)
 }
